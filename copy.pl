@@ -19,6 +19,15 @@ These are the legit commands:
    checkout   Switch branches or restore current directory files
    merge      Join two development histories together\n
 ";
+    exit 1;
+}
+
+# checks if file name is valid ie start with an alphanumeric character ([a-zA-Z0-9]) 
+# and will only contain alpha-numeric characters plus '.', '-' and '_' characters.
+sub valid_file {
+    my ($fileName) = shift @_;
+    return 0 if (!($fileName =~ m/^[A-Za-z0-9]{1}[A-Za-z0-9\.\-\_]/));
+    return 1;
 }
 
 # add file to given destination
@@ -72,13 +81,58 @@ sub newest_commit {
     return $max;  
 }
 
-# commit functionality
+# removes files from current directory  or  current directory and the index
+sub rm_files {
+    my ($forced) = shift @_;
+    my ($cached) = shift @_;
+    my (@files) = @_;
+    
+    foreach $file (@_) {
+        # file is not valid
+        if (valid_file == 0) {
+            print "legit.pl: error: invalid filename '$file'\n";
+            exit 1;
+        }
+    
+        # given --... as argument 
+        if ($file =~ m/^--.+$/) {
+            print "usage: legit.pl rm [--force] [--cached] <filenames>\n";
+            exit 1;
+        }
+        
+        # file not in repository
+        if (!(-e ".legit/index/$file")) {
+            print "legit.pl: error: '$file' is not in the legit repository";
+            exit 1;
+        }
+        
+        $last_commit = newest_commit - 1;
+        
+        # remove file current directory
+        if ($cached == 0) {
+            if (-e ".legit/commit_$last_commit" && forced == 0 && (cmp_files "$file", ".legit/commit_$last_commit") == 0) {
+                print "legit.pl: error: '$file' in repository is different to working file\n";
+                exit 1;
+            }
+            unlink $file; 
+          
+        # remove file from index
+        } else {
+            if (forced == 0 && (cmp_files ".legit/index/$file", ".legit/commit_$last_commit") == 0) {
+                print "legit.pl: error: '$file' has changes staged in the index\n";
+                exit 1;
+            }
+            unlink ".legit/index/$file";    
+        }   
+    }
+}
+
+# commit files to repository
 sub copy_files {
     my ($message) = shift @_;
     my ($flag) = shift @_;
-    
     # no changes to index
-    if (!(-e ".legit/index/y") && $flag ne "-a") {
+    if (!(-e ".legit/index/.y") && $flag ne "-a") {
         print "Nothing to commit\n";
     
     # commit new/changed files
@@ -100,13 +154,14 @@ sub copy_files {
                 $fileChanged = 1;
                 add_to_dest $file, ".legit/index/$file";
             }
+            
+            # no files changed => nothing to commit        
+            if ($fileChanged == 0 && !(-e ".legit/index/.y")) {
+                print "Nothing to commit\n";
+                return;
+            }
         }
 
-        # no files changed => nothing to commit        
-        if ($fileChanged == 0 && !(-e ".legit/index/.y")) {
-            print "Nothing to commit\n";
-            return;
-        }
 
         mkdir ".legit/commit_$new_commit";
         
@@ -177,10 +232,18 @@ elsif (!(-e ".legit") && $command ne "init") {
 # add files to the index 
 elsif ($command eq "add") {
     foreach $file (@ARGV) {
+        # file is not in current repository
         if (!(-e $file)) {
             print STDERR "legit.pl: error: can not open '$file'";
             exit 1;
         }
+        
+        # file is not valid
+        if (valid_file == 0) {
+            print "legit.pl: error: invalid filename '$file'\n";
+            exit 1;
+        }
+        
         add_to_dest $file, ".legit/index/$file";
         rename ".legit/index/.n", ".legit/index/.y" if (-e ".legit/index/.n");
     }
@@ -258,15 +321,25 @@ elsif ($command eq "log") {
 elsif ($command eq "show") {
     $cf = shift @ARGV;
    
+    # split ':'
+
     # no commits
     if (!(-e ".legit/commit_0")) {
         print STDERR "legit.pl: error: your repository does not have any commits yet\n";
         exit 1;
     }
     
+    if (defined $cf && $cf =~ m/.*:(.+)/) {
+        # file is not valid
+        if (valid_file $1 == 0) {
+            print "legit.pl: error: invalid filename '$1'\n";
+            exit 1;
+        }   
+    }
+    
     # show commit:fileName 
     if (defined $cf && $cf =~ m/^(\d+):([A-Za-z0-9]{1}[A-Za-z0-9_\.\-]*)$/) {
-        # commit doesnt exit
+        # commit doesnt exist
         if (!(-e ".legit/commit_$1")) {
             print STDERR "legit.pl: error: unknown commit '$1'\n";
             exit 1;
@@ -312,8 +385,39 @@ elsif ($command eq "show") {
         print "usage: legit.pl <commit>:<filename>\n";
         exit 1;
     }
+
+} elsif ($command eq "rm") {
+    # no commits
+    if (!(-e ".legit/commit_0")) {
+        print STDERR "legit.pl: error: your repository does not have any commits yet\n";
+        exit 1;
+    }
     
-} elsif ($command eq "rm" || $command eq "status" || $command eq "branch" || $command eq "checkout" || $command eq "merge") {  
+    $arg = shift @ARGV;
+    
+    # rm fileNames
+    if ($arg ne "--force" && $arg ne "--cached") {
+        rm_files 0, 0, @ARGV; 
+    
+    } elsif ($arg eq "--force") {
+        $nextArg = shift @ARGV;
+        # rm --forced --cached fileNames
+        if ($arg eq "--cached") {
+            rm_files 1, 1, @ARGV;
+        
+        # rm --forced fileNames
+        } else {
+            rm_files 1, 0, @ARGV;
+        }
+    
+    } elsif ($arg eq "--cached") {
+        rm_files 1, 0, @ARGV;   
+    
+    } else {
+        
+    }
+    
+} elsif ($command eq "status" || $command eq "branch" || $command eq "checkout" || $command eq "merge") {  
 
 # invalid command
 } else {
