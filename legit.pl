@@ -1,37 +1,138 @@
 #!/usr/bin/perl -w 
 
-# TO DO
-# if file added wasnt changed since last commit then nothing to commit     
-# new commit folders should have old commit files that werent added and commited   
-    # eg add a b commit    add a commit   commit_1 should have b from first but a fron 2nd commit
+# for status    just add status text file 
+
+# checks if files identical
+sub cmp_files {
+    my ($file1) = shift @_;
+    my ($file2) = shift @_;
+    
+    open F1, '<', $file1;
+    open F2, '<', $file2;
+    
+    @f1 = <F1>;
+    @f2 = <F2>;
+    
+    close F1;
+    close F2;
+
+
+    return 0 if (@f1 != @f2);
+    
+    while (@f1 != 0) {
+        return 0 if ((shift @f1) ne (shift @f2));
+    }
+    
+    return 1;
+}
+
+# get next commit number 
+sub newest_commit {
+   my $max=0;
+    foreach my $commits (glob ".legit/*") {
+        $commits =~ s/\.legit\///g;
+        next if (!($commits =~ m/commit_/));
+        $commits =~ s/commit_//g;
+        $commits++;
+        $max = $commits if ($max < $commits);
+    } 
+    return $max;  
+}
 
 # commit functionality
 sub copy_files {
-    if (!(-e ".legit/index")) {
+    my ($message) = shift @_;
+    my ($flag) = shift @_;
+    
+    # maybe when add to index  -> creates txt file   -> check index has this txt file    when commit rename 
+    if (!(-e ".legit/index") && $flag ne "-a") {
         print "Nothing to commit\n";
     } else { 
-        my ($message) = shift @_;
-        my $max=0;
-        foreach my $commits (glob ".legit/*") {
-            $commits =~ s/\.legit\///g;
-            next if (!($commits =~ m/commit_/));
-            $commits =~ s/commit_//g;
-            $commits++;
-            $max = $commits if ($max < $commits);
+        my $max=newest_commit;
+
+        my $fileChanged = 0;
+         
+        my $input_path = ".legit/index/"; 
+        my $output_path = ".legit/index/";  
+        if (!(-e ".legit/index")) {
+            my $latest_commit = $max - 1;
+            $input_path = ".legit/commit_$latest_commit/";
+            $output_path = ".legit/commit_$max/";
+        }    
+
+        # commit -a  add all files in current directory to index if an older version of that file is already in the index
+        if ($flag eq "-a") {
+            # need add files from prev commit 
+            foreach $file (glob "*") {
+                next if (!(-e "$input_path$file"));
+                my $y = cmp_files "$input_path$file", "$file";  # compare prev version of file 
+                next if ($fileChanged == 0 && $y == 1);  # file havent been changed ie something to commit
+                
+                $fileChanged = 1;
+                mkdir $output_path if (!(-e ".legit/commit_$max"));
+                
+                open F, '<', "$file";
+                open C, '>', "$output_path$file";
+                
+                print C <F>;
+                
+                close C;
+                close F;
+            }
+        }        
+        
+        # for flag  -a 
+        if ($fileChanged == 1) {
+            # copy files from last commit into newest commit
+            $x = $max - 1;
+            foreach $oldFile (glob ".legit/commit_$x/*") {
+                $oldPath = $oldFile;
+                $oldFile =~ s/\.legit\/commit_$x//g;
+                next if (-e "$output_path$oldFile"); # skip file if already in newest commit
+                
+                # write old files to new commit
+                open F, '<', $oldPath;
+                open N, '>', "$output_path$oldFile";
+                print N <F>;
+                close N;
+                close F;
+            }
         }
         
-        rename ".legit/index", ".legit/commit_$max"; 
-       # mkdir ".legit/index";
-        
-        print "Committed as commit $max\n";
-        # write commit message to log
-        open O, '<', ".legit/log.txt";
-        open F, '>', ".legit/log1.txt";
-        print F "$max $message\n";
-        print F <O>;
-        close F;
-        close O;
-        rename ".legit/log1.txt", ".legit/log.txt";
+        # commit if flag -a and a file has been changed  or  flag is -m  or  flag -a and file was added previously
+        if ($fileChanged == 1 || $flag eq "-m" || -e ".legit/index") {
+            if (-e ".legit/index") {
+                rename ".legit/index", ".legit/commit_$max"; 
+                
+                #if (!(-e ".legit/index")) {
+                    #mkdir ".legit/index";
+                    ## copy files from last commit into index
+                    #$max = newest_commit;
+                    #$max--;
+                    #foreach $oldFile (glob ".legit/commit_$max/*") {
+                   #     open F, '<', $oldFile;
+                  #      $oldFile =~ s/\.legit\/commit_$max//g;
+                 #       open N, '>', ".legit/index/$oldFile";
+                #        print N <F>;
+               #         close N;
+              #          close F;
+             #       }
+            #    } 
+            } 
+            
+            print "Committed as commit $max\n";
+
+            # write commit message to log
+            open O, '<', ".legit/log.txt";
+            open F, '>', ".legit/log1.txt";
+            print F "$max $message\n";
+            print F <O>;
+            close F;
+            close O;
+            rename ".legit/log1.txt", ".legit/log.txt";
+        } else {
+            print "Nothing to commit\n";
+        }
     }
 }
 
@@ -45,7 +146,7 @@ if ($command eq "init") {
         exit 1;
     }
     if (-e ".legit") {
-        print "legit.pl: error: .legit already exists\n";
+        print STDERR "legit.pl: error: .legit already exists\n";
         exit 1;
     } else {
         mkdir ".legit";
@@ -58,17 +159,29 @@ if ($command eq "init") {
 
 # using legit without legit initiated 
 elsif (!(-e ".legit") && $command ne "init") {
-    print "legit.pl: error: no .legit directory containing legit repository exists\n";
+    print STDERR "legit.pl: error: no .legit directory containing legit repository exists\n";
     exit 1;
 }
 
 elsif ($command eq "add") {
     if (!(-e ".legit/index")) {
         mkdir ".legit/index";
+        # copy files from last commit into index
+        $max = newest_commit;
+        $max--;
+        foreach $oldFile (glob ".legit/commit_$max/*") {
+            open F, '<', $oldFile;
+            $oldFile =~ s/\.legit\/commit_$max//g;
+            open N, '>', ".legit/index/$oldFile";
+            print N <F>;
+            close N;
+            close F;
+        }
     } 
+
     foreach $file (@ARGV) {
         if (!(-e $file)) {
-            print "legit.pl: error: can not open '$file'";
+            print STDERR "legit.pl: error: can not open '$file'";
             exit 1;
         }
         open F, '<', "$file";
@@ -92,7 +205,7 @@ elsif ($command eq "commit") {
  
         # commit -m "message"
         } else {
-            copy_files $m;
+            copy_files $m, "-m";
         }
         
     # commit -a -m "message"
@@ -102,8 +215,13 @@ elsif ($command eq "commit") {
             print "usage: legit.pl commit [-a] -m commit-message\n";
             exit 1;
         }
-        copy_files $message;
-
+        
+        copy_files $message, "-a";
+    
+    } elsif ($flag =~ m/-m(.+)/ && defined $m) {
+        print "usage: legit.pl commit [-a] -m commit-message\n";
+        exit 1;
+   
     # commit with no separation between -m and message
     } elsif (($flag eq "-a" && defined $m && $m =~ m/-m(.+)/) || $flag =~ m/-m(.+)/) {
         # invalid extra arguments  or  empty message
@@ -111,7 +229,9 @@ elsif ($command eq "commit") {
             print "usage: legit.pl commit [-a] -m commit-message\n";
             exit 1;
         }
-        copy_files $1;
+        $x = "-m";
+        $x = $flag if ($flag eq "-a");
+        copy_files $1, $x;
        
     # incorrect commit syntax
     } else {
@@ -123,7 +243,7 @@ elsif ($command eq "commit") {
 elsif ($command eq "log") {
     # no commits
     if (!(-e ".legit/commit_0")) {
-        print "legit.pl: error: your repository does not have any commits yet\n";
+        print STDERR "legit.pl: error: your repository does not have any commits yet\n";
         exit 1;
     
     # invalid extra arguments
@@ -144,7 +264,7 @@ elsif ($command eq "show") {
    
     # no commits
     if (!(-e ".legit/commit_0")) {
-        print "legit.pl: error: your repository does not have any commits yet\n";
+        print STDERR "legit.pl: error: your repository does not have any commits yet\n";
         exit 1;
     }
     
@@ -152,13 +272,13 @@ elsif ($command eq "show") {
     if (defined $cf && $cf =~ m/^(\d+):([A-Za-z0-9]{1}[A-Za-z0-9_\.\-]*)$/) {
         # commit doesnt exit
         if (!(-e ".legit/commit_$1")) {
-            print "legit.pl: error: unknown commit '$1'\n";
+            print STDERR "legit.pl: error: unknown commit '$1'\n";
             exit 1;
         }
         
         # file doesnt exist in commit
         if (!(-e ".legit/commit_$1/$2")) {
-            print "legit.pl: error: '$2' not found in commit $1\n";
+            print STDERR "legit.pl: error: '$2' not found in commit $1\n";
             exit 1;
         }
         
@@ -171,16 +291,17 @@ elsif ($command eq "show") {
         # when commit, index removed 
         if (!(-e ".legit/index")) {
             # read from latest commit
-            $max=0;
-            foreach $commits (glob ".legit/*") {
-                $commits =~ s/\.legit\///g;
-                next if (!($commits =~ m/commit_/));
-                $commits =~ s/commit_//g;
-                $max = $commits if ($max < $commits);
-            }           
-
+            # for rm   removes from index   but doenst read from latest commit  so need change
+                # so maybe create index file after rename    OR   text file says which files in index -> refer to latest commit (for show and rm) 
+                                                                     # if affects   commit/add   then prob do first one  
+                #  add and comit file     change that file, add   then show :file and show latest commit:file       see how index works
+                #  rm file   show :file    show lastCommit:file    see how rm works
+                # if add file   then must commit file  before rm it (is it same for if any other file different to rm file)
+                
+            $max=newest_commit;
+            $max--;
             if (!(-e ".legit/commit_$max/$1")) {
-                print "legit.pl: error: '$1' not found in index\n";
+                print STDERR "legit.pl: error: '$1' not found in index\n";
                 exit 1;
             }            
             
@@ -191,7 +312,7 @@ elsif ($command eq "show") {
         # read from index
         } else {
             if (!(-e ".legit/index/$1")) {
-                print "legit.pl: error: '$1' not found in index\n";
+                print STDERR "legit.pl: error: '$1' not found in index\n";
                 exit 1;
             }
             open F, '<', ".legit/index/$1";
@@ -201,12 +322,12 @@ elsif ($command eq "show") {
     
     # commit doesnt exist
     } elsif (defined $cf && $cf =~ m/^(.*):.*$/) {
-        print "legit.pl: error: unknown commit '$1'\n";
+        print STDERR "legit.pl: error: unknown commit '$1'\n";
         exit 1;
     
     # singular word argument not in form of commit:fileName
-    } elsif (defined $cf && !($cf =~ m/^.*:.*$/)) {
-       print "legit.pl: error: invalid object \n";    
+    } elsif (defined $cf && !($cf =~ m/^.*:.*$/) && !(defined (shift @ARGV))) {
+       print STDERR "legit.pl: error: invalid object $cf\n";    
        exit 1;
    
     # argument is : 
@@ -219,10 +340,12 @@ elsif ($command eq "show") {
         print "usage: legit.pl <commit>:<filename>\n";
         exit 1;
     }
-}
+    
+} elsif ($command eq "rm" || $command eq "status" || $command eq "branch" || $command eq "checkout" || $command eq "merge") {  
 
-else {
-    print "legit.pl: error: unknown command a.txt
+# invalid command
+} else {
+    print STDERR "legit.pl: error: unknown command a.txt
 Usage: legit.pl <command> [<args>]
 
 These are the legit commands:
