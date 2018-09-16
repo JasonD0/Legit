@@ -1,29 +1,75 @@
 #!/usr/bin/perl -w 
 
 sub rm_files;
+sub cmp_files;
+sub update_file_status;
+sub read_status;
+sub my_exit;
+sub print_commands;
+sub valid_file;
+sub add_to_dest;
+sub newest_commit;
+sub copy_files;
 
 %file_status = ();
 
-
+# update file statuses in the current directory
 sub update_file_status {    
-    open my $F, '<' ".legit/status.txt";
+    open my $F, '>', ".legit/status.txt";
+    
+    # write file and it's status into the status file
     foreach my $file (keys %file_status) {
+        next if ($file_status{$file} eq "");   
         print {$F} "$file - $file_status{$file}\n";
     }
-    close $f;
+    
+    close $F;
 }
 
+# get latest file statuses in the current directory
 sub read_status {
+    # map file and it's status as a hash
     open my $F, '<', ".legit/status.txt";
     
     foreach my $line (<$F>) {
         $file_status{$1} = $2 if ($line =~ m/^(.*?) - (.*)/);
     }
     
-    close $F;    
+    close $F;
+
+    my $last_commit = newest_commit;
+    $last_commit--;
+    
+    # check for changes in current repository and change the file statuses
+    foreach my $file (glob "*") {
+	    next if (-d $file);
+	    # file doesnt exit or is untracked  =>  untracked
+	    if (!(defined $file_status{$file}) || $file_status{$file} eq "untracked") {
+        	$file_status{$file} = "untracked";
+	 
+	    # file is different to the file in the index  =>  changes in index  or  same as repo
+        } elsif ((cmp_files $file, ".legit/index/$file") == 0) {
+            $file_status{$file} = "changes in index" if (!($file_status{$file} =~ "file modified"));
+            $file_status{$file} .= " and changes in index" if ($file_status{$file} eq "file modified");
+
+            # file in current directory is also the same as the file in the repository
+            if (-e ".legit/commit_$last_commit/$file" && (cmp_files $file, ".legit/commit_$last_commit/$file") == 1) {
+                $file_status{$file} = "same as repo" if ($file_status{$file} ne "file modified and changes in index");
+            }
+        }
+    }    
+
+    # check for files that have been deleted in current repository    
+    foreach $file (glob ".legit/index/*") {
+        $file =~ s/\.legit\/index\///g;
+        if (!(-e $file)) {
+            $file_status{$file} = "file deleted";
+            rename ".legit/index/.n", ".legit/index/.y" if (-e ".legit/index/.n");
+        }
+    }
 }
 
-sub my_exit; {
+sub my_exit {
     update_file_status;
     exit 1;
 }
@@ -45,11 +91,11 @@ These are the legit commands:
    checkout   Switch branches or restore current directory files
    merge      Join two development histories together\n
 ";
-    my_exit;
+    exit 1;
 }
 
 # checks if file name is valid ie start with an alphanumeric character ([a-zA-Z0-9]) 
-# and will only contain alpha-numeric characters plus '.', '-' and '_' characters.
+# and only contain alpha-numeric characters plus '.', '-' and '_' characters.
 sub valid_file {
     my ($fileName) = shift @_;
     return 0 if (!($fileName =~ m/^[A-Za-z0-9]{1}/) || ($fileName =~ s/[A-Za-z0-9\.\-\_]//g && $fileName ne ""));
@@ -133,47 +179,39 @@ sub rm_files {
             my_exit;
         }
         
-        
         my $last_commit = newest_commit;
-        my $index_curr_identical = 0;
-        my $index_repo_identical = 0;
-        my $index_repo_identical = 0;
         $last_commit--;
         
-        # try remove file from index    always remove if cached == 1 
+        # file in index is different to both current directory and in repository
+        if ($forced == 0 && $file_status{$file} eq "file modified and changes in index") {
+            print STDERR "legit.pl: error: '$file' in index is different to both working file and repository\n";
+            my_exit;
+        }
+        
         if ($forced == 0 && $cached == 0) {
-            $index_repo_identical = cmp_files ".legit/index/$file", ".legit/commit_$last_commit/$file" if (-e ".legit/commit_$last_commit/$file");
-            $repo_curr_identical = cmp_files "$file", ".legit/commit_$last_commit/$file" if (-e ".legit/commit_$last_commit/$file");
-            $index_curr_identical = cmp_files "$file", ".legit/index/$file";
-            
-            # file in index is different to both current directory and in repository
-            if ($index_repo_identical == 0 && $index_curr_identical == 0) {
-                print STDERR "legit.pl: error: 'e' in index is different to both working file and repository\n";
-                my_exit;
-            }
-            
             # file not in last commit   or  file has changed in index since last commit
-            if (!(-e ".legit/commit_$last_commit/$file") || $index_repo_identical == 0) {
+            if ($file_status{$file} eq "file modified" || $file_status{$file} eq "added to index") {
                 print STDERR "legit.pl: error: '$file' has changes staged in the index\n";
                 my_exit;
             }
-            
+#            if (!(-e ".legit/commit_$last_commit/$file") || $file_status{$file} ne "same as repo") {
+
             # file not in last commit  or  file has changed in current directory since last commit
-            if (!(-e ".legit/commit_$last_commit/$file") || $index_curr_identical == 0) {
+            if (!(-e ".legit/commit_$last_commit/$file") || $file_status{$file} =~ /changes in index/) {
                 print STDERR "legit.pl: error: '$file' in repository is different to working file\n";
                 my_exit;
             }
         }
-        $file_status{$file} = "untracked";  # file removed from index 
+        
+        # change file status
+        $file_status{$file} = "untracked";  
         unlink ".legit/index/$file";    
-        
-        
-        # try remove file current directory
+        rename ".legit/index/.n", ".legit/index/.y" if (-e ".legit/index/.n");
+
+        # remove file from current directory        
         if ($cached == 0) {
-            #$file_status{$file} = "deleted" if ($file_status{$file} eq "same as repo"); # i -> a -> c -> rm
-            #if here then prob force -> removes from both curr dir and index
-            # i -> a -> c -> change file -> a -> change file -> rm --forced     
-            $file_status{$file} = "deleted"; #if ($file_status{$file} eq "file modified and changes in index");  
+            # change file status
+            $file_status{$file} = "deleted"; 
             unlink $file; 
         }   
     }
@@ -183,9 +221,10 @@ sub rm_files {
 sub copy_files {
     my ($message) = shift @_;
     my ($flag) = shift @_;
+    
     # no changes to index
     if (!(-e ".legit/index/.y") && $flag ne "-a") {
-        print "Nothing to commit\n";
+        print "nothing to commit\n";
     
     # commit new/changed files
     } else { 
@@ -196,20 +235,20 @@ sub copy_files {
             # commit -a:  add all files in current directory to index if an older version of that file is already in the index
             foreach my $file (glob ".legit/index/*") {
                 $file =~ s/\.legit\/index\///g; 
-                next if (!(-e $file));  
-                
-                # ignore unchanged files
-                my $identical = cmp_files ".legit/index/$file", "$file"; 
-                next if ($fileChanged == 0 && $identical == 1); 
+                # ignore files that doesnt exist and unchanged files
+                next if (!(-e $file) || !($file_status{$file} =~ /changes in index/));  
                  
                 # add file to index 
                 $fileChanged = 1;
                 add_to_dest $file, ".legit/index/$file";
+                
+                # change file status
+                $file_status{$file} = "same as repo";   
             }
             
             # no files changed => nothing to commit        
             if ($fileChanged == 0 && !(-e ".legit/index/.y")) {
-                print "Nothing to commit\n";
+                print "nothing to commit\n";
                 return;
             }
         }
@@ -218,13 +257,18 @@ sub copy_files {
         
         # copy files from index to new commit
         foreach my $oldFile (glob ".legit/index/*") {
-            $file_status{$oldFile} = "same as repo" if ($file_status{$oldFile} eq "added to index");    # i -> a -> c
-            $file_status{$oldFile} = "same as repo" if ($file_status{$oldFile} eq "file modified");     # i -> a -> c -> change file -> a -> c
-            $file_status{$oldFile} = "changes in index" if ($file_status{$oldFile} eq "file modified and changes in index");    # i -> a -> c -> cf -> a -> cf -> c
             next if ($oldFile eq ".legit/index/.y" || $oldFile eq ".legit/index/.n");
+            $oldFile =~ s/\.legit\/index\///g;
+            
+            # change file status
+            # uncommited files  =>  same as repo
+            $file_status{$oldFile} = "same as repo" if ($file_status{$oldFile} eq "added to index" || $file_status{$oldFile} eq "file modified");    
+            # index file different to repository file and current  =>  changes in index
+            $file_status{$oldFile} = "changes in index" if ($file_status{$oldFile} eq "file modified and changes in index");   
+            
             my $oldName = $oldFile;
             $oldName =~ s/\.legit\/index\///g;
-            add_to_dest $oldFile, ".legit/commit_$new_commit/$oldName"; 
+            add_to_dest ".legit/index/$oldFile", ".legit/commit_$new_commit/$oldName"; 
         }
         
         print "Committed as commit $new_commit\n";
@@ -240,8 +284,9 @@ sub copy_files {
         close $OLD_LOG;
         rename ".legit/log1.txt", ".legit/log.txt";
         
+        # remove deleted files from status
         foreach my $file (keys %file_status) {
-            $file_status{$file} = "" if ($file_status{$file} eq "deleted");      # remove deleted files from status
+            $file_status{$file} = "" if ($file_status{$file} eq "deleted");      
         }
     }
 }
@@ -279,11 +324,12 @@ elsif ($command eq "init") {
         # create status text
         open F, '>', ".legit/status.txt";
         foreach $file (glob "*") {
+            next if (-d $file);
             print F "$file - untracked\n";
         }
         close F;
         
-        # indication to whether files have been changed (n=no, y=yes)
+        # indicates if there is something to commit
         mkdir ".legit/index/.n";  
     }
 }
@@ -312,10 +358,7 @@ elsif ($command eq "add") {
         }
         
         # ignore unchanged files
-        if (-e ".legit/index/$file") {
-            $identical = cmp_files ".legit/index/$file", "$file"; 
-            next if ($fileChanged == 0 && $identical == 1); 
-        }
+        next if (-e ".legit/index/$file" && !($file_status{$file} =~ /changes in index/));
         
         read_status if ($fileChanged == 0);
         
@@ -324,16 +367,11 @@ elsif ($command eq "add") {
         add_to_dest $file, ".legit/index/$file";
         
         # files have changed and added 
-        $file_status{$file} = "added to index" if ($file_status eq "untracked");       # init -> add 
-        $file_status{$file} = "file modified" if ($file_status eq "changes in index"); # init -> add -> commit -> change file -> add      
+        $file_status{$file} = "added to index" if ($file_status{$file} eq "untracked");       # init -> add 
+        $file_status{$file} = "file modified" if ($file_status{$file} eq "changes in index"); # init -> add -> commit -> change file -> add      
     }
-    
-    # no files changed => nothing to commit        
-    if ($fileChanged == 0 && !(-e ".legit/index/.y")) {
-        print "Nothing to commit\n";
-    } else {
-        rename ".legit/index/.n", ".legit/index/.y" if (-e ".legit/index/.n" && $fileChanged == 1);
-    }
+    rename ".legit/index/.n", ".legit/index/.y" if (-e ".legit/index/.n" && $fileChanged == 1);
+    update_file_status;
 }
 
 # adds files in the index to the "repository"
@@ -344,7 +382,7 @@ elsif ($command eq "commit") {
 
     if (defined $flag && $flag eq "-m" && defined $m) {
         # commit -m -a  or  invalid extra arguments  or empty message
-        if ($m eq "-a" || defined (shift @ARGV) || $m eq "") {
+        if ($m =~ /^-/ || defined (shift @ARGV) || $m eq "") {
             print STDERR "usage: legit.pl commit [-a] -m commit-message\n";
             my_exit;
  
@@ -480,12 +518,12 @@ elsif ($command eq "show") {
     }
 
 } elsif ($command eq "rm") {
-    read_status;
     # no commits
     if (!(-e ".legit/commit_0")) {
         print STDERR "legit.pl: error: your repository does not have any commits yet\n";
         my_exit;
     }
+    read_status;
     
     $arg = shift @ARGV;
     
@@ -522,8 +560,15 @@ elsif ($command eq "show") {
     if (!(-e ".legit/commit_0")) {
         print STDERR "legit.pl: error: your repository does not have any commits yet\n";
         my_exit;
-    }     
+    }
+    read_status;
     
+    foreach $file (sort keys %file_status) {
+    	print "$file - $file_status{$file}\n";
+    }
+    
+    update_file_status;
+
 } elsif ($command eq "branch" || $command eq "checkout" || $command eq "merge") {  
 
 # invalid command
