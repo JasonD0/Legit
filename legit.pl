@@ -135,6 +135,7 @@ sub cmp_files {
     
     while (@f1 != 0) {
         return 0 if ((shift @f1) ne (shift @f2));
+        return 0 if (@f1 != 0 && (pop @f1) ne (pop @f2));
     }
     
     return 1;
@@ -189,12 +190,11 @@ sub rm_files {
         }
         
         if ($forced == 0 && $cached == 0) {
-            # file not in last commit   or  file has changed in index since last commit
+            # file has changed in index since last commit
             if ($file_status{$file} eq "file modified" || $file_status{$file} eq "added to index") {
                 print STDERR "legit.pl: error: '$file' has changes staged in the index\n";
                 my_exit;
             }
-#            if (!(-e ".legit/commit_$last_commit/$file") || $file_status{$file} ne "same as repo") {
 
             # file not in last commit  or  file has changed in current directory since last commit
             if (!(-e ".legit/commit_$last_commit/$file") || $file_status{$file} =~ /changes in index/) {
